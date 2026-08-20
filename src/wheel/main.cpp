@@ -3,32 +3,46 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include "protocol.h"
+#include <ArduinoOTA.h>
+
+const char *ssid = "YOUR_HOME_WIFI_SSID";
+const char *password = "YOUR_HOME_WIFI_PASSWORD";
+bool otaMode = false;
 
 uint8_t baseMac[] = {0x80, 0xB5, 0x4E, 0xC5, 0xED, 0x84};
-
 WheelPacket packet;
 
-// =========================
+// Battery
+#define BATTERY_PIN 4
+
+#define BATTERY_R1 10000.0f
+#define BATTERY_R2 10000.0f
+
+#define BATTERY_MEASURE_INTERVAL 500
+
+#define BATTERY_LOW_VOLTAGE 3.30f
+
+float batteryVoltage = 0.0f;
+uint16_t batteryVoltage_mV = 0;
+
+unsigned long lastBatteryMeasure = 0;
+
 // Encoder
-// =========================
 #define ENC_A 14
 #define ENC_B 3
 
 ESP32Encoder encoder;
-long lastAckedPosition = 0; // Остання успішно підтверджена базами позиція
+long lastAckedPosition = 0;
 
-// =========================
 // Timings
-// =========================
-const unsigned long MIN_SEND_INTERVAL = 20;   // Анти-спам (мс)
-const unsigned long HEARTBEAT_INTERVAL = 100; // Keep-Alive (мс)
+const unsigned long MIN_SEND_INTERVAL = 20;
+const unsigned long HEARTBEAT_INTERVAL = 100;
 const unsigned long DEBOUNCE_TIME = 30;
 
 bool buttonState[BUTTON_COUNT];
 bool lastReading[BUTTON_COUNT];
 unsigned long lastDebounceTime[BUTTON_COUNT];
 
-// Для оптимізації відправки
 uint32_t lastSentButtons = 0;
 unsigned long lastSendTime = 0;
 uint8_t lastSentPOV = POV_CENTER;
@@ -51,10 +65,6 @@ uint16_t getButtonState()
     return state;
 }
 
-// =====================================================
-// CHECK POV DIRECTION
-// =====================================================
-
 bool isPOVPressed(ButtonFunction function)
 {
     for (int i = 0; i < BUTTON_COUNT; i++)
@@ -67,10 +77,6 @@ bool isPOVPressed(ButtonFunction function)
 
     return false;
 }
-
-// =====================================================
-// GET POV
-// =====================================================
 
 uint8_t getPOVState()
 {
@@ -129,11 +135,185 @@ uint8_t getPOVState()
 
     return POV_CENTER;
 }
+float readBatteryVoltage()
+{
+    const int samples = 16;
+
+    uint64_t sum_mV = 0;
+
+    for (int i = 0; i < samples; i++)
+    {
+        sum_mV += analogReadMilliVolts(BATTERY_PIN);
+        delayMicroseconds(100);
+    }
+
+    float pinVoltage =
+        (sum_mV / (float)samples) / 1000.0f;
+
+    float batteryVoltage =
+        pinVoltage *
+        ((BATTERY_R1 + BATTERY_R2) / BATTERY_R2);
+
+    Serial.print("ADC GPIO4: ");
+    Serial.print(pinVoltage, 3);
+    Serial.print(" V | Battery: ");
+    Serial.print(batteryVoltage, 3);
+    Serial.println(" V");
+
+    return batteryVoltage;
+}
+void checkBatteryAtStartup()
+{
+    Serial.println();
+    Serial.println("================================");
+    Serial.println("       BATTERY CHECK");
+    Serial.println("================================");
+
+    delay(100);
+
+    batteryVoltage = readBatteryVoltage();
+    batteryVoltage_mV = (uint16_t)(batteryVoltage * 1000.0f);
+
+    Serial.print("Battery voltage: ");
+    Serial.print(batteryVoltage, 2);
+    Serial.println(" V");
+
+    if (batteryVoltage >= 4.15f)
+    {
+        Serial.println("Battery status: FULL");
+    }
+    else if (batteryVoltage >= 3.85f)
+    {
+        Serial.println("Battery status: GOOD");
+    }
+    else if (batteryVoltage >= 3.50f)
+    {
+        Serial.println("Battery status: MEDIUM");
+    }
+    else if (batteryVoltage >= BATTERY_LOW_VOLTAGE)
+    {
+        Serial.println("Battery status: LOW");
+    }
+    else
+    {
+        Serial.println("WARNING: BATTERY VOLTAGE TOO LOW!");
+    }
+
+    Serial.println("================================");
+    Serial.println();
+}
+void updateBatteryVoltage(unsigned long now)
+{
+    if (now - lastBatteryMeasure < BATTERY_MEASURE_INTERVAL)
+        return;
+
+    lastBatteryMeasure = now;
+
+    batteryVoltage = readBatteryVoltage();
+    batteryVoltage_mV = (uint16_t)(batteryVoltage * 1000.0f);
+
+    Serial.print("Battery: ");
+    Serial.print(batteryVoltage, 2);
+    Serial.print(" V");
+
+    if (batteryVoltage >= 4.15f)
+    {
+        Serial.println(" | FULL");
+    }
+    else if (batteryVoltage >= 3.85f)
+    {
+        Serial.println(" | GOOD");
+    }
+    else if (batteryVoltage >= 3.50f)
+    {
+        Serial.println(" | MEDIUM");
+    }
+    else if (batteryVoltage >= BATTERY_LOW_VOLTAGE)
+    {
+        Serial.println(" | LOW");
+    }
+    else
+    {
+        Serial.println(" | CRITICAL");
+    }
+}
+
+bool checkOtaButton()
+{
+    int encButtonPin = -1;
+
+    for (int i = 0; i < BUTTON_COUNT; i++)
+    {
+        if (strcmp(buttons[i].name, "ENC_BTN") == 0)
+        {
+            encButtonPin = buttons[i].pin;
+            break;
+        }
+    }
+
+    if (encButtonPin == -1)
+        return false;
+
+    pinMode(encButtonPin, INPUT_PULLUP);
+    delay(50);
+    if (digitalRead(encButtonPin) == LOW)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+void startOtaMode()
+{
+    Serial.println("\n[OTA MODE ACTIVATED via ENC_BTN]");
+
+    Serial.println("\n[OTA MODE: AP (Access Point) ACTIVATED via ENC_BTN]");
+
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(ssid, password);
+
+    IPAddress IP = WiFi.softAPIP();
+    Serial.print("AP IP address: ");
+    Serial.println(IP);
+
+    Serial.println(WiFi.localIP());
+
+    ArduinoOTA.setHostname("SteeringWheel-ESP32");
+
+    ArduinoOTA.onStart([]()
+                       { Serial.println("Start updating firmware..."); });
+    ArduinoOTA.onEnd([]()
+                     { Serial.println("\nUpdate complete! Rebooting..."); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+    ArduinoOTA.onError([](ota_error_t error)
+                       { Serial.printf("Error[%u]: ", error); });
+
+    ArduinoOTA.begin();
+    Serial.println("Ready for OTA updates. Waiting for upload...");
+}
 
 void setup()
 {
     Serial.begin(115200);
     delay(1500);
+
+    pinMode(BATTERY_PIN, INPUT);
+
+    analogReadResolution(12);
+    analogSetPinAttenuation(
+        BATTERY_PIN,
+        ADC_11db);
+
+    checkBatteryAtStartup();
+
+    if (checkOtaButton())
+    {
+        otaMode = true;
+        startOtaMode();
+        return;
+    }
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -229,20 +409,17 @@ void buttonsLoop(unsigned long now)
 
 void sendPacket(unsigned long now)
 {
-    // 1. Поточний стан з апаратного лічильника
     int64_t currentPosition = encoder.getCount();
     int16_t currentDelta = (currentPosition - lastAckedPosition);
     uint32_t currentButtons = getButtonState();
 
     uint8_t currentPOV = getPOVState();
 
-    // 2. Умови для відправки
     bool stateChanged = (currentDelta != 0) || (currentButtons != lastSentButtons || currentPOV != lastSentPOV);
     bool timeToHeartbeat = (now - lastSendTime >= HEARTBEAT_INTERVAL);
 
     if (stateChanged || timeToHeartbeat)
     {
-        // Анти-спам інтервал
         if (now - lastSendTime < MIN_SEND_INTERVAL)
             return;
 
@@ -257,7 +434,6 @@ void sendPacket(unsigned long now)
 
         if (result == ESP_OK)
         {
-            // Оновлюємо точки відліку ТІЛЬКИ при успішній доставці
             lastAckedPosition = currentPosition;
             lastSentButtons = currentButtons;
             lastSentPOV = currentPOV;
@@ -270,8 +446,6 @@ void sendPacket(unsigned long now)
         else
         {
             Serial.println("Packet failed to send. Retrying next cycle...");
-            // Якщо пакет не дійшов, lastAckedPosition не змінюється,
-            // і дельта автоматично підсумується в наступному пакеті!
         }
     }
 }
@@ -280,6 +454,15 @@ void loop()
 {
     unsigned long now = millis();
 
+    if (otaMode)
+    {
+        ArduinoOTA.handle();
+        delay(1);
+        return;
+    }
+
+    updateBatteryVoltage(now);
     buttonsLoop(now);
     sendPacket(now);
+    delay(10);
 }

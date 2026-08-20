@@ -1,72 +1,6 @@
-// #pragma once
-// #include <stdint.h>
-
-// struct WheelPacket
-// {
-//     uint16_t magic;
-//     uint8_t sequence;
-//     uint32_t buttons;
-//     int16_t encoderDelta;
-// };
-
-// struct ButtonDesc
-// {
-//     const char *name;
-//     uint8_t pin;
-//     uint8_t bitIndex;
-// };
-
-// // Єдиний масив для всієї системи
-// // const ButtonDesc buttons[] = {
-// //     {"AL", 5, 0},
-// //     {"AR", 6, 1},
-// //     {"AD", 7, 2},
-// //     {"AU", 15, 3},
-// //     {"5", 42, 4},
-// //     {"7", 41, 5},
-// //     {"11", 40, 6},
-// //     {"12", 39, 7},
-// //     {"9", 38, 8},  // Замість старого ризикового 37
-// //     {"10", 48, 9}, // Замість старого ризикового 36
-// //     {"8", 47, 10}, // Замість старого ризикового 35
-// //     {"6", 21, 11}, // Замість старого ризикового 45
-// //     {"1", 10, 12},
-// //     {"2", 13, 13},
-// //     {"3", 11, 14},
-// //     {"4", 12, 15},
-// //     {"ENC_BTN", 8, 16}};
-// const ButtonDesc buttons[] = {
-//     {"AL", 5, 13},
-//     {"AR", 6, 14},
-//     {"AD", 7, 15},
-//     {"AU", 15, 16},
-//     {"5", 42, 5},
-//     {"7", 41, 7},
-//     {"11", 40, 11},
-//     {"12", 39, 12},
-//     {"9", 38, 9},   // Замість старого ризикового 37
-//     {"10", 48, 10}, // Замість старого ризикового 36
-//     {"8", 47, 8},   // Замість старого ризикового 35
-//     {"6", 21, 6},   // Замість старого ризикового 45
-//     {"1", 10, 1},
-//     {"2", 13, 2},
-//     {"3", 11, 3},
-//     {"4", 12, 4},
-//     {"ENC_BTN", 8, 17}};
-
-// const int BUTTON_COUNT = sizeof(buttons) / sizeof(buttons[0]);
-
-// #define AL_BIT 13
-// #define AR_BIT 14
-// #define AD_BIT 15
-// #define AU_BIT 16
 #pragma once
 
 #include <stdint.h>
-
-// =====================================================
-// POV
-// =====================================================
 
 enum POVDirection : uint8_t
 {
@@ -82,10 +16,6 @@ enum POVDirection : uint8_t
     POV_CENTER = 15
 };
 
-// =====================================================
-// BUTTON FUNCTION
-// =====================================================
-
 enum ButtonFunction : uint8_t
 {
     BUTTON_NORMAL,
@@ -96,10 +26,7 @@ enum ButtonFunction : uint8_t
     BUTTON_POV_LEFT
 };
 
-// =====================================================
 // ESP-NOW PACKET
-// =====================================================
-
 struct WheelPacket
 {
     uint16_t magic;
@@ -114,10 +41,6 @@ struct WheelPacket
 static_assert(
     sizeof(WheelPacket) == 8,
     "WheelPacket must be 8 bytes");
-
-// =====================================================
-// BUTTON DESCRIPTION
-// =====================================================
 
 struct ButtonDesc
 {
@@ -175,10 +98,6 @@ const ButtonDesc buttons[] =
 
 const int BUTTON_COUNT =
     sizeof(buttons) / sizeof(buttons[0]);
-
-// =====================================================
-// NORMAL BUTTON COUNT
-// =====================================================
 
 const uint8_t NORMAL_BUTTON_COUNT = []()
 {
