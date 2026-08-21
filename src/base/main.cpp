@@ -6,23 +6,22 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include "protocol.h"
-#include "soc/rtc_cntl_reg.h"
 
-#define SDA_PIN 8
-#define SCL_PIN 9
-#define AS5600_ADDR 0x36
+// own libs
+#include <SteeringSensor.h>
+#include <PedalsInput.h>
+
+constexpr uint8_t STEERING_SDA_PIN = 8;
+constexpr uint8_t STEERING_SCL_PIN = 9;
+
+SteeringSensor steering(720);
 
 // PEDAL & STEERING CALIBRATION
-#define PEDAL_PIN 4
-#define PEDAL_MIN 0
-#define PEDAL_CENTER 1949
-#define PEDAL_MAX 4096
+constexpr uint8_t PEDAL_PIN = 4;
 
-#define STEERING_MIN -4096
-#define STEERING_MAX 4096
+PedalsInput pedals(PEDAL_PIN);
 
 USBCDC USBSerial;
-WheelHIDDevice wheel;
 
 uint16_t centerAngle = 0;
 
@@ -161,43 +160,7 @@ public:
     }
 };
 
-uint16_t readAS5600(uint8_t reg)
-{
-    Wire.beginTransmission(AS5600_ADDR);
-    Wire.write(reg);
-    if (Wire.endTransmission(false) != 0)
-        return 0;
-
-    if (Wire.requestFrom((uint8_t)AS5600_ADDR, (uint8_t)2) != 2)
-        return 0;
-
-    uint8_t high = Wire.read();
-    uint8_t low = Wire.read();
-    return ((uint16_t)high << 8) | low;
-}
-
-uint16_t readAngle()
-{
-    return readAS5600(0x0C) & 0x0FFF;
-}
-
-uint16_t readMagnitude()
-{
-    return readAS5600(0x1B) & 0x0FFF;
-}
-
-int16_t readPedals(int raw)
-{
-    raw = constrain(raw, PEDAL_MIN, PEDAL_MAX);
-    if (raw < PEDAL_CENTER)
-    {
-        return map(raw, PEDAL_MIN, PEDAL_CENTER, -32768, 0);
-    }
-    else
-    {
-        return map(raw, PEDAL_CENTER, PEDAL_MAX, 0, 32767);
-    }
-}
+WheelHIDDevice wheel;
 
 uint16_t getFinalButtons()
 {
@@ -211,14 +174,18 @@ uint16_t getFinalButtons()
 
 void setup()
 {
-    Serial0.begin(115200);
+    USBSerial.begin();
     delay(1000);
 
-    Wire.begin(SDA_PIN, SCL_PIN);
-    centerAngle = readAngle();
+    if (!steering.begin(8, 9))
+    {
+        USBSerial.println("AS5600 not found!");
+    }
 
     analogReadResolution(12);
-    pinMode(PEDAL_PIN, INPUT);
+    // pinMode(PEDAL_PIN, INPUT);
+
+    pedals.begin();
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -231,21 +198,17 @@ void setup()
     esp_now_register_recv_cb(OnDataRecv);
 
     // USB
-    USBSerial.begin();
     wheel.begin();
     USB.begin();
 
     USBSerial.println("====================================");
     USBSerial.println("   WHEEL RECEIVER READY (HID + CDC) ");
     USBSerial.println("====================================");
-
-    Serial0.println("====================================");
-    Serial0.println("      WHEEL RECEIVER READY");
-    Serial0.println("====================================");
 }
 
 void loop()
 {
+
     if (USBSerial.available())
     {
         String pcCommand = USBSerial.readStringUntil('\n');
@@ -257,109 +220,126 @@ void loop()
         }
         else if (pcCommand == "CENTER")
         {
-            centerAngle = readAngle();
+            steering.center();
             USBSerial.println("OK: Centered");
         }
-    }
-
-    if (packetReceived)
-    {
-        packetReceived = false;
-        if (receivedPacket.magic == 0xABCD)
+        else if (pcCommand == "PEDALS_CALIBRATION:START")
         {
-            currentButtonState = receivedPacket.buttons;
-            currentEncoderDelta = receivedPacket.encoderDelta;
-            encoderDelta += currentEncoderDelta;
-            currentPOV = receivedPacket.pov;
+            pedals.startCalibration();
+            USBSerial.println("OK: Calibration started");
+        }
+        else if (pcCommand == "PEDALS_CALIBRATION:STOP")
+        {
+            pedals.finishCalibration();
+            USBSerial.println("OK: Calibration finished");
+        }
+        else if (pcCommand.startsWith("SET_MARGIN_CALIBRATION "))
+        {
+            int margin = pcCommand
+                             .substring(String("SET_MARGIN_CALIBRATION ").length())
+                             .toInt();
+
+            pedals.setCalibrationMargin(margin);
+
+            USBSerial.print("OK: Calibration margin = ");
+            USBSerial.println(pedals.getCalibrationMargin());
+        }
+
+        if (packetReceived)
+        {
+            packetReceived = false;
+            if (receivedPacket.magic == 0xABCD)
+            {
+                currentButtonState = receivedPacket.buttons;
+                currentEncoderDelta = receivedPacket.encoderDelta;
+                encoderDelta += currentEncoderDelta;
+                currentPOV = receivedPacket.pov;
+            }
+        }
+
+        uint16_t finalHIDButtons = getFinalButtons();
+        currentEncoderDelta = 0;
+
+        // STEERING
+        steering.update();
+
+        int16_t steeringValue = steering.getValue();
+        uint16_t angle = steering.getRawAngle();
+        uint16_t mag = steering.getMagnitude();
+
+        // PEDALS
+
+        pedals.update();
+        int16_t pedalsValue = pedals.getValue();
+
+        // SEND DATA
+        static uint32_t lastHID = 0;
+        if (millis() - lastHID >= 20)
+        {
+            lastHID = millis();
+            if (wheel.ready())
+            {
+                wheel.send(steeringValue, pedalsValue, mag, finalHIDButtons, currentPOV);
+                encoderDelta = 0;
+            }
+        }
+
+        // Debug
+        static uint32_t lastDebug = 0;
+
+        if (USBSerial && millis() - lastDebug >= 200)
+        {
+            lastDebug = millis();
+
+            if (pedals.isCalibrating())
+            {
+                USBSerial.print("CALIBRATION IS GOING");
+
+                USBSerial.print(" | Max Value: ");
+                USBSerial.print(pedals.getMaxRawCalibrationValue());
+
+                USBSerial.print(" | Min Value: ");
+                USBSerial.print(pedals.getMinRawCalibrationValue());
+
+                USBSerial.print(" | Pedal RAW: ");
+                USBSerial.print(pedals.getRawValue());
+
+                USBSerial.print(" | Pedal: ");
+                USBSerial.print(pedalsValue);
+
+                USBSerial.print(" | Threshold: ");
+                USBSerial.print(pedals.getThreshold());
+
+                USBSerial.print(" | Calibration Margin: ");
+                USBSerial.print(pedals.getCalibrationMargin());
+
+                USBSerial.println();
+            }
+            else
+            {
+                USBSerial.print("Angle: ");
+                USBSerial.print(angle);
+
+                USBSerial.print(" | Position: ");
+                USBSerial.print(steering.getPosition());
+
+                USBSerial.print(" | Steering: ");
+                USBSerial.print(steeringValue);
+
+                USBSerial.print(" | Pedal RAW: ");
+                USBSerial.print(pedals.getRawValue());
+
+                USBSerial.print(" | Pedal: ");
+                USBSerial.print(pedalsValue);
+
+                USBSerial.print(" | MAG: ");
+                USBSerial.print(mag);
+
+                USBSerial.print(" | Buttons: 0x");
+                USBSerial.print(finalHIDButtons, HEX);
+
+                USBSerial.print(" | Encoder: ");
+                USBSerial.println(currentEncoderDelta);
+            }
         }
     }
-
-    uint16_t finalHIDButtons = getFinalButtons();
-    currentEncoderDelta = 0;
-
-    // STEERING
-    static uint16_t lastAngle = 0;
-    static int32_t accumulatedAngle = 0;
-    static bool firstAngle = true;
-
-    uint16_t angle = readAngle();
-    if (firstAngle)
-    {
-        lastAngle = angle;
-        firstAngle = false;
-    }
-
-    int32_t delta = (int32_t)angle - (int32_t)lastAngle;
-    if (delta > 2048)
-        delta -= 4096;
-    else if (delta < -2048)
-        delta += 4096;
-
-    accumulatedAngle += delta;
-    lastAngle = angle;
-    accumulatedAngle = constrain(accumulatedAngle, STEERING_MIN, STEERING_MAX);
-    int16_t steering = map(accumulatedAngle, STEERING_MIN, STEERING_MAX, -32768, 32767);
-
-    // PEDALS
-    static int oldPedalsRawValue = 0;
-    static int16_t oldPedalsValue = 0;
-    int pedalRaw = analogRead(PEDAL_PIN);
-    int16_t pedals;
-
-    if (abs(pedalRaw - oldPedalsRawValue) > 20)
-    {
-        pedals = readPedals(pedalRaw);
-        oldPedalsRawValue = pedalRaw;
-        oldPedalsValue = pedals;
-    }
-    else
-    {
-        pedals = oldPedalsValue;
-    }
-
-    // MAG
-    uint16_t mag = readMagnitude();
-
-    // SEND DATA
-    static uint32_t lastHID = 0;
-    if (millis() - lastHID >= 20)
-    {
-        lastHID = millis();
-        if (wheel.ready())
-        {
-            wheel.send(steering, pedals, mag, finalHIDButtons, currentPOV);
-            encoderDelta = 0;
-        }
-    }
-
-    static uint32_t lastDebug = 0;
-
-    if (millis() - lastDebug >= 200)
-    {
-        lastDebug = millis();
-
-        Serial0.print("Angle: ");
-        Serial0.print(angle);
-
-        Serial0.print(" | Accum: ");
-        Serial0.print(accumulatedAngle);
-
-        Serial0.print(" | Steering: ");
-        Serial0.print(steering);
-
-        Serial0.print(" | Pedal: ");
-        Serial0.print(pedals);
-
-        Serial0.print(" | MAG: ");
-        Serial0.print(mag);
-
-        Serial0.print(" | Buttons: 0x");
-        Serial0.print(
-            finalHIDButtons,
-            HEX);
-
-        Serial0.print(" | Encoder: ");
-        Serial0.println(
-            currentEncoderDelta);
-    }
-}

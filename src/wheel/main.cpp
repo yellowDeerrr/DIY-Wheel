@@ -5,12 +5,15 @@
 #include "protocol.h"
 #include <ArduinoOTA.h>
 
-const char *ssid = "YOUR_HOME_WIFI_SSID";
-const char *password = "YOUR_HOME_WIFI_PASSWORD";
+const char *ssid = "wifi";
+const char *password = "YOUR_HOME_WIFI_PASSWORD123";
 bool otaMode = false;
 
 uint8_t baseMac[] = {0x80, 0xB5, 0x4E, 0xC5, 0xED, 0x84};
 WheelPacket packet;
+
+// LED
+#define LED_PIN 16
 
 // Battery
 #define BATTERY_PIN 4
@@ -18,7 +21,7 @@ WheelPacket packet;
 #define BATTERY_R1 10000.0f
 #define BATTERY_R2 10000.0f
 
-#define BATTERY_MEASURE_INTERVAL 500
+#define BATTERY_MEASURE_INTERVAL 1000
 
 #define BATTERY_LOW_VOLTAGE 3.30f
 
@@ -162,6 +165,18 @@ float readBatteryVoltage()
 
     return batteryVoltage;
 }
+
+void blinkLed(int count)
+{
+    for (int i = 0; i < count; i++)
+    {
+        digitalWrite(LED_PIN, HIGH);
+        delay(900);
+        digitalWrite(LED_PIN, LOW);
+        delay(900);
+    }
+    digitalWrite(LED_PIN, HIGH);
+}
 void checkBatteryAtStartup()
 {
     Serial.println();
@@ -180,22 +195,27 @@ void checkBatteryAtStartup()
 
     if (batteryVoltage >= 4.15f)
     {
+        blinkLed(0);
         Serial.println("Battery status: FULL");
     }
     else if (batteryVoltage >= 3.85f)
     {
+        blinkLed(1);
         Serial.println("Battery status: GOOD");
     }
     else if (batteryVoltage >= 3.50f)
     {
+        blinkLed(2);
         Serial.println("Battery status: MEDIUM");
     }
     else if (batteryVoltage >= BATTERY_LOW_VOLTAGE)
     {
+        blinkLed(3);
         Serial.println("Battery status: LOW");
     }
     else
     {
+        blinkLed(4);
         Serial.println("WARNING: BATTERY VOLTAGE TOO LOW!");
     }
 
@@ -300,6 +320,7 @@ void setup()
     delay(1500);
 
     pinMode(BATTERY_PIN, INPUT);
+    pinMode(LED_PIN, OUTPUT);
 
     analogReadResolution(12);
     analogSetPinAttenuation(

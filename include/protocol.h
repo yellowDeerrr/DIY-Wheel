@@ -93,8 +93,12 @@ const ButtonDesc buttons[] =
         {"11", 40, 10, BUTTON_NORMAL},
         {"12", 39, 11, BUTTON_NORMAL},
 
+        // shifters
+        {"LEFT_SHF", 1, 12, BUTTON_NORMAL},
+        {"RIGHT_SHF", 2, 13, BUTTON_NORMAL},
+
         // Encoder push button
-        {"ENC_BTN", 8, 12, BUTTON_NORMAL}};
+        {"ENC_BTN", 8, 14, BUTTON_NORMAL}};
 
 const int BUTTON_COUNT =
     sizeof(buttons) / sizeof(buttons[0]);
