@@ -4,6 +4,7 @@
 #include <esp_now.h>
 #include "protocol.h"
 #include <ArduinoOTA.h>
+#include "esp_ota_ops.h"
 
 const char *ssid = "wifi";
 const char *password = "YOUR_HOME_WIFI_PASSWORD123";
@@ -50,9 +51,9 @@ uint32_t lastSentButtons = 0;
 unsigned long lastSendTime = 0;
 uint8_t lastSentPOV = POV_CENTER;
 
-uint16_t getButtonState()
+uint32_t getButtonState()
 {
-    uint16_t state = 0;
+    uint32_t state = 0;
 
     for (int i = 0; i < BUTTON_COUNT; i++)
     {
@@ -312,6 +313,17 @@ void startOtaMode()
 
     ArduinoOTA.begin();
     Serial.println("Ready for OTA updates. Waiting for upload...");
+    const esp_partition_t *running = esp_ota_get_running_partition();
+
+    if (running != NULL)
+    {
+        // Access the label string
+        printf("Running from partition: %s\n", running->label);
+    }
+    else
+    {
+        printf("Failed to get current running partition!\n");
+    }
 }
 
 void setup()
@@ -478,7 +490,7 @@ void loop()
     if (otaMode)
     {
         ArduinoOTA.handle();
-        delay(1);
+        delay(2);
         return;
     }
 

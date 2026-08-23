@@ -16,7 +16,7 @@ public:
         int16_t steering,
         int16_t pedals,
         uint16_t mag,
-        uint16_t buttons,
+        uint32_t buttons,
         uint8_t pov);
 
 protected:

@@ -33,14 +33,14 @@ struct WheelPacket
     uint8_t sequence;
 
     uint8_t pov;
-    uint16_t buttons;
+    uint32_t buttons;
 
     int16_t encoderDelta;
 };
 
 static_assert(
-    sizeof(WheelPacket) == 8,
-    "WheelPacket must be 8 bytes");
+    sizeof(WheelPacket) == 12,
+    "WheelPacket must be 12 bytes");
 
 struct ButtonDesc
 {

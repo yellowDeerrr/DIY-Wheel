@@ -11,20 +11,25 @@
 #include <SteeringSensor.h>
 #include <PedalsInput.h>
 #include <WheelHID.h>
+#include <WheelConsole.h>
 
 WheelHID wheel;
+
+constexpr uint8_t UP_SHT_PIN = 17;
+constexpr uint8_t DOWN_SHT_PIN = 16;
 
 constexpr uint8_t STEERING_SDA_PIN = 8;
 constexpr uint8_t STEERING_SCL_PIN = 9;
 
-SteeringSensor steering(720);
+SteeringSensor steering;
 
 // PEDAL & STEERING CALIBRATION
 constexpr uint8_t PEDAL_PIN = 4;
 
 PedalsInput pedals(PEDAL_PIN);
-
 USBCDC USBSerial;
+
+WheelConsole console(USBSerial, steering, pedals);
 
 uint16_t centerAngle = 0;
 
@@ -32,7 +37,7 @@ uint16_t centerAngle = 0;
 volatile bool packetReceived = false;
 WheelPacket receivedPacket;
 
-uint16_t currentButtonState = 0;
+uint32_t currentButtonState = 0;
 int16_t encoderDelta = 0;
 int16_t currentEncoderDelta = 0;
 uint8_t currentPOV = POV_CENTER;
@@ -49,28 +54,40 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
     }
 }
 
-uint16_t getFinalButtons()
+uint32_t getFinalButtons()
 {
-    uint16_t result = currentButtonState;
+    uint32_t result = currentButtonState;
     if (encoderDelta > 0)
         result |= (1U << NORMAL_BUTTON_COUNT);
     else if (encoderDelta < 0)
         result |= (1U << (NORMAL_BUTTON_COUNT + 1));
+    if (digitalRead(UP_SHT_PIN) == LOW)
+        result |= (1U << (NORMAL_BUTTON_COUNT + 2));
+
+    if (digitalRead(DOWN_SHT_PIN) == LOW)
+        result |= (1U << (NORMAL_BUTTON_COUNT + 3));
     return result;
 }
 
 void setup()
 {
     USBSerial.begin();
-    delay(1000);
+    wheel.begin();
+    USB.begin();
 
-    if (!steering.begin(8, 9))
+    delay(500);
+
+    console.begin();
+
+    if (!steering.begin(STEERING_SDA_PIN, STEERING_SCL_PIN))
     {
-        USBSerial.println("AS5600 not found!");
+        console.println("ERROR: AS5600 not found!");
     }
 
     analogReadResolution(12);
-    // pinMode(PEDAL_PIN, INPUT);
+
+    pinMode(UP_SHT_PIN, INPUT_PULLUP);
+    pinMode(DOWN_SHT_PIN, INPUT_PULLUP);
 
     pedals.begin();
 
@@ -84,56 +101,49 @@ void setup()
     }
     esp_now_register_recv_cb(OnDataRecv);
 
-    // USB
-    wheel.begin();
-    USB.begin();
-
-    USBSerial.println("====================================");
-    USBSerial.println("   WHEEL RECEIVER READY (HID + CDC) ");
-    USBSerial.println("====================================");
+    console.println("====================================");
+    console.println("   WHEEL RECEIVER READY (HID + CDC) ");
+    console.println("====================================");
 }
 void loop()
 {
-    // =====================================================
-    // CDC COMMANDS
-    // =====================================================
+    // if (USBSerial.available())
+    // {
+    //     String pcCommand = USBSerial.readStringUntil('\n');
+    //     pcCommand.trim();
 
-    if (USBSerial.available())
-    {
-        String pcCommand = USBSerial.readStringUntil('\n');
-        pcCommand.trim();
+    //     if (pcCommand == "PING")
+    //     {
+    //         USBSerial.println("PONG: Wheel is online");
+    //     }
+    //     else if (pcCommand == "CENTER")
+    //     {
+    //         steering.center();
+    //         USBSerial.println("OK: Centered");
+    //     }
+    //     else if (pcCommand == "PEDALS_CALIBRATION:START")
+    //     {
+    //         pedals.startCalibration();
+    //         USBSerial.println("OK: Calibration started");
+    //     }
+    //     else if (pcCommand == "PEDALS_CALIBRATION:STOP")
+    //     {
+    //         pedals.finishCalibration();
+    //         USBSerial.println("OK: Calibration finished");
+    //     }
+    //     else if (pcCommand.startsWith("SET_MARGIN_CALIBRATION "))
+    //     {
+    //         int margin = pcCommand
+    //                          .substring(String("SET_MARGIN_CALIBRATION ").length())
+    //                          .toInt();
 
-        if (pcCommand == "PING")
-        {
-            USBSerial.println("PONG: Wheel is online");
-        }
-        else if (pcCommand == "CENTER")
-        {
-            steering.center();
-            USBSerial.println("OK: Centered");
-        }
-        else if (pcCommand == "PEDALS_CALIBRATION:START")
-        {
-            pedals.startCalibration();
-            USBSerial.println("OK: Calibration started");
-        }
-        else if (pcCommand == "PEDALS_CALIBRATION:STOP")
-        {
-            pedals.finishCalibration();
-            USBSerial.println("OK: Calibration finished");
-        }
-        else if (pcCommand.startsWith("SET_MARGIN_CALIBRATION "))
-        {
-            int margin = pcCommand
-                             .substring(String("SET_MARGIN_CALIBRATION ").length())
-                             .toInt();
+    //         pedals.setCalibrationMargin(margin);
 
-            pedals.setCalibrationMargin(margin);
-
-            USBSerial.print("OK: Calibration margin = ");
-            USBSerial.println(pedals.getCalibrationMargin());
-        }
-    }
+    //         USBSerial.print("OK: Calibration margin = ");
+    //         USBSerial.println(pedals.getCalibrationMargin());
+    //     }
+    // }
+    console.update();
 
     // =====================================================
     // ESP-NOW
@@ -179,7 +189,7 @@ void loop()
     // HID
     // =====================================================
 
-    uint16_t finalHIDButtons = getFinalButtons();
+    uint32_t finalHIDButtons = getFinalButtons();
 
     static uint32_t lastHID = 0;
 
@@ -209,61 +219,61 @@ void loop()
     // DEBUG
     // =====================================================
 
-    static uint32_t lastDebug = 0;
+    // static uint32_t lastDebug = 0;
 
-    if (USBSerial && millis() - lastDebug >= 200)
-    {
-        lastDebug = millis();
+    // if (USBSerial && millis() - lastDebug >= 200)
+    // {
+    //     lastDebug = millis();
 
-        if (pedals.isCalibrating())
-        {
-            USBSerial.print("CALIBRATION IS GOING");
+    //     if (pedals.isCalibrating())
+    //     {
+    //         USBSerial.print("CALIBRATION IS GOING");
 
-            USBSerial.print(" | Max Value: ");
-            USBSerial.print(pedals.getMaxRawCalibrationValue());
+    //         USBSerial.print(" | Max Value: ");
+    //         USBSerial.print(pedals.getMaxRawCalibrationValue());
 
-            USBSerial.print(" | Min Value: ");
-            USBSerial.print(pedals.getMinRawCalibrationValue());
+    //         USBSerial.print(" | Min Value: ");
+    //         USBSerial.print(pedals.getMinRawCalibrationValue());
 
-            USBSerial.print(" | Pedal RAW: ");
-            USBSerial.print(pedals.getRawValue());
+    //         USBSerial.print(" | Pedal RAW: ");
+    //         USBSerial.print(pedals.getRawValue());
 
-            USBSerial.print(" | Pedal: ");
-            USBSerial.print(pedalsValue);
+    //         USBSerial.print(" | Pedal: ");
+    //         USBSerial.print(pedalsValue);
 
-            USBSerial.print(" | Threshold: ");
-            USBSerial.print(pedals.getThreshold());
+    //         USBSerial.print(" | Threshold: ");
+    //         USBSerial.print(pedals.getThreshold());
 
-            USBSerial.print(" | Calibration Margin: ");
-            USBSerial.print(pedals.getCalibrationMargin());
+    //         USBSerial.print(" | Calibration Margin: ");
+    //         USBSerial.print(pedals.getCalibrationMargin());
 
-            USBSerial.println();
-        }
-        else
-        {
-            USBSerial.print("Angle: ");
-            USBSerial.print(angle);
+    //         USBSerial.println();
+    //     }
+    //     else
+    //     {
+    //         USBSerial.print("Angle: ");
+    //         USBSerial.print(angle);
 
-            USBSerial.print(" | Position: ");
-            USBSerial.print(steering.getPosition());
+    //         USBSerial.print(" | Position: ");
+    //         USBSerial.print(steering.getPosition());
 
-            USBSerial.print(" | Steering: ");
-            USBSerial.print(steeringValue);
+    //         USBSerial.print(" | Steering: ");
+    //         USBSerial.print(steeringValue);
 
-            USBSerial.print(" | Pedal RAW: ");
-            USBSerial.print(pedals.getRawValue());
+    //         USBSerial.print(" | Pedal RAW: ");
+    //         USBSerial.print(pedals.getRawValue());
 
-            USBSerial.print(" | Pedal: ");
-            USBSerial.print(pedalsValue);
+    //         USBSerial.print(" | Pedal: ");
+    //         USBSerial.print(pedalsValue);
 
-            USBSerial.print(" | MAG: ");
-            USBSerial.print(mag);
+    //         USBSerial.print(" | MAG: ");
+    //         USBSerial.print(mag);
 
-            USBSerial.print(" | Buttons: 0x");
-            USBSerial.print(finalHIDButtons, HEX);
+    //         USBSerial.print(" | Buttons: 0x");
+    //         USBSerial.print(finalHIDButtons, HEX);
 
-            USBSerial.print(" | Encoder: ");
-            USBSerial.println(currentEncoderDelta);
-        }
-    }
+    //         USBSerial.print(" | Encoder: ");
+    //         USBSerial.println(currentEncoderDelta);
+    //     }
+    // }
 }
